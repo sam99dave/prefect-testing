@@ -36,8 +36,8 @@ def process_result(result_dict: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@flow(name="hours-to-seconds-flow", log_prints=True)
-def hours_to_seconds(result_from_date_checker: Dict[str, Any]):
+@flow(name="hours-to-seconds-flow", log_prints=True, persist_result=True)
+def hours_to_seconds(result_from_date_checker: Dict[str, Any]) -> Dict[str, Any]:
     """
     Convert hours to seconds if date checker completed successfully.
     Input: {"result": hour_difference or None, "status": "Completed" or "Failed"}

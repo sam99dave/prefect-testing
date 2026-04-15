@@ -1,10 +1,12 @@
 """
 Date checker flow - validates if date is past or future.
 Input: date string DD/MM/YYYY
-Output: {"result": hour_difference or None, "status": "Completed" or "Failed"}
+Output: Combined result from date checker + hours-to-seconds conversion.
 """
 
 from datetime import datetime
+from typing import Any, Dict, Optional
+
 from prefect import flow, task
 from prefect.deployments import run_deployment
 
@@ -16,9 +18,10 @@ def parse_date(date_str: str) -> datetime:
 
 
 @task
-def calculate_hour_difference(input_date: datetime) -> dict:
+def calculate_hour_difference(input_date: datetime) -> Dict[str, Any]:
     """
     Calculate hour difference between now and input date.
+
     Returns Failed if future date.
     """
     now = datetime.now()
@@ -33,51 +36,57 @@ def calculate_hour_difference(input_date: datetime) -> dict:
 
 
 @task
-def trigger_hours_to_seconds_conversion(date_result: dict):
+def trigger_and_wait_for_conversion(date_result: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Task that triggers the hours-to-seconds flow deployment using Prefect SDK.
+    Trigger the hours-to-seconds deployment via ``run_deployment``, block
+    until the remote flow run reaches a terminal state, then return its result.
     """
-    print(f"Task: Triggering hours-to-seconds deployment with input: {date_result}")
+    print(f"Triggering hours-to-seconds deployment with input: {date_result}")
 
     flow_run = run_deployment(
         name="hours-to-seconds-flow/hours-to-seconds-deployment",
         parameters={"result_from_date_checker": date_result},
-        timeout=0,
         as_subflow=False,
     )
 
-    return {
-        "triggered_flow_run_id": str(flow_run.id),
-        "triggered_flow_run_state": str(flow_run.state.name)
-        if flow_run.state
-        else None,
-    }
+    print(f"Flow run {flow_run.name} finished — state: {flow_run.state.name}")
+
+    conversion_result: Optional[Dict[str, Any]] = flow_run.state.result(
+        raise_on_failure=False,
+    )
+    print(f"Conversion result: {conversion_result}")
+    return conversion_result
 
 
 @flow(name="date-checker-flow", log_prints=True)
-def date_checker(date_str: str):
+def date_checker(date_str: str) -> Dict[str, Any]:
     """
-    Check if date is past or future.
+    Check if date is past or future, trigger conversion, and return combined output.
+
     Input format: DD/MM/YYYY
-    Also triggers hours-to-seconds flow via task.
+    Returns the hours-to-seconds conversion result when the date is valid and
+    in the past, otherwise returns the error / failure from the date check.
     """
     print(f"Input date: {date_str}")
 
     try:
         input_date = parse_date(date_str)
-        result = calculate_hour_difference(input_date)
-        print(f"Date checker result: {result}")
+        date_result = calculate_hour_difference(input_date)
+        print(f"Date checker result: {date_result}")
 
-        # Trigger the second flow via task
-        trigger_info = trigger_hours_to_seconds_conversion(result)
-        print(f"Triggered conversion flow: {trigger_info}")
+        conversion_result = trigger_and_wait_for_conversion(date_result)
 
-        return result
+        final_output = {
+            "date_check": date_result,
+            "conversion": conversion_result,
+        }
+        print(f"Final output: {final_output}")
+        return final_output
 
     except ValueError as e:
-        error_result = {
+        error_result: Dict[str, Any] = {
             "result": None,
-            "status": f"Failed: Invalid date format - {str(e)}",
+            "status": f"Failed: Invalid date format - {e}",
         }
         print(f"Error: {error_result}")
         return error_result
