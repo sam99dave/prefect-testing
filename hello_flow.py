@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-import anyio.from_thread
+import asyncio
 
 from prefect import flow, task
 from prefect.client.orchestration import get_client
@@ -55,12 +55,12 @@ async def _read_conversion_artifact_async(
 
 def _read_conversion_artifact(flow_run_id: str) -> Optional[Dict[str, Any]]:
     """
-    Sync wrapper — bridges into the async SDK client via ``anyio``.
+    Sync wrapper — runs the async SDK call in a fresh event loop.
 
-    Prefect tasks run in worker threads managed by anyio, so
-    ``anyio.from_thread.run`` is the correct bridge to the event loop.
+    Prefect's older managed-pool runtime doesn't use anyio worker threads,
+    so ``asyncio.run`` is the safest portable bridge.
     """
-    return anyio.from_thread.run(_read_conversion_artifact_async, flow_run_id)
+    return asyncio.run(_read_conversion_artifact_async(flow_run_id))
 
 
 @task
