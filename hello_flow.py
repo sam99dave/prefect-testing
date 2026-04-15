@@ -8,14 +8,11 @@ import json
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+import httpx
+
 from prefect import flow, task
-from prefect.client.orchestration import get_client
-from prefect.client.schemas.filters import (
-    ArtifactFilter,
-    ArtifactFilterFlowRunId,
-    ArtifactFilterKey,
-)
 from prefect.deployments import run_deployment
+from prefect.settings import PREFECT_API_KEY, PREFECT_API_URL
 
 
 @task
@@ -44,26 +41,35 @@ def calculate_hour_difference(input_date: datetime) -> Dict[str, Any]:
 
 def _read_conversion_artifact(flow_run_id: str) -> Optional[Dict[str, Any]]:
     """
-    Read the conversion-result artifact from a completed flow run.
+    Read the ``conversion-result`` artifact via the Prefect REST API.
 
-    The artifact stores a markdown code-fenced JSON block; this helper
-    strips the fence and parses the payload.
+    Uses httpx directly so it works on any ``prefect-client`` version
+    (the sync SDK client doesn't expose ``read_artifacts`` everywhere).
+    The artifact body is a markdown-fenced JSON block — strip the fence
+    and parse.
     """
-    from uuid import UUID
+    api_url = PREFECT_API_URL.value()
+    api_key = PREFECT_API_KEY.value()
 
-    with get_client(sync_client=True) as client:
-        artifacts = client.read_artifacts(
-            artifact_filter=ArtifactFilter(
-                flow_run_id=ArtifactFilterFlowRunId(any_=[UUID(flow_run_id)]),
-                key=ArtifactFilterKey(any_=["conversion-result"]),
-            ),
-            limit=1,
-        )
+    resp = httpx.post(
+        f"{api_url}/artifacts/filter",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "artifacts": {
+                "flow_run_id": {"any_": [flow_run_id]},
+                "key": {"any_": ["conversion-result"]},
+            },
+            "limit": 1,
+            "sort": "CREATED_DESC",
+        },
+    )
+    resp.raise_for_status()
+    items = resp.json()
 
-    if not artifacts:
+    if not items:
         return None
 
-    raw: Any = artifacts[0].data
+    raw: Any = items[0].get("data")
     if isinstance(raw, str):
         raw = raw.strip().removeprefix("```json").removesuffix("```").strip()
         return json.loads(raw)
@@ -76,7 +82,7 @@ def _read_conversion_artifact(flow_run_id: str) -> Optional[Dict[str, Any]]:
 def trigger_and_wait_for_conversion(date_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Trigger the hours-to-seconds deployment, block until it completes,
-    then read the result back via the Prefect artifact API.
+    then read the result back via the Prefect artifact REST API.
     """
     print(f"Triggering hours-to-seconds deployment with input: {date_result}")
 
