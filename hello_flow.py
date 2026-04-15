@@ -4,10 +4,17 @@ Input: date string DD/MM/YYYY
 Output: Combined result from date checker + hours-to-seconds conversion.
 """
 
+import json
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 from prefect import flow, task
+from prefect.client.orchestration import get_client
+from prefect.client.schemas.filters import (
+    ArtifactFilter,
+    ArtifactFilterFlowRunId,
+    ArtifactFilterKey,
+)
 from prefect.deployments import run_deployment
 
 
@@ -35,11 +42,41 @@ def calculate_hour_difference(input_date: datetime) -> Dict[str, Any]:
     return {"result": round(hours_diff, 2), "status": "Completed"}
 
 
-@task
-def trigger_and_wait_for_conversion(date_result: Dict[str, Any]) -> Dict[str, Any]:
+def _read_conversion_artifact(flow_run_id: str) -> Optional[Dict[str, Any]]:
     """
-    Trigger the hours-to-seconds deployment via ``run_deployment``, block
-    until the remote flow run reaches a terminal state, then return its result.
+    Read the conversion-result artifact from a completed flow run.
+
+    The artifact stores a markdown code-fenced JSON block; this helper
+    strips the fence and parses the payload.
+    """
+    from uuid import UUID
+
+    with get_client(sync_client=True) as client:
+        artifacts = client.read_artifacts(
+            artifact_filter=ArtifactFilter(
+                flow_run_id=ArtifactFilterFlowRunId(any_=[UUID(flow_run_id)]),
+                key=ArtifactFilterKey(any_=["conversion-result"]),
+            ),
+            limit=1,
+        )
+
+    if not artifacts:
+        return None
+
+    raw: Any = artifacts[0].data
+    if isinstance(raw, str):
+        raw = raw.strip().removeprefix("```json").removesuffix("```").strip()
+        return json.loads(raw)
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
+@task
+def trigger_and_wait_for_conversion(date_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Trigger the hours-to-seconds deployment, block until it completes,
+    then read the result back via the Prefect artifact API.
     """
     print(f"Triggering hours-to-seconds deployment with input: {date_result}")
 
@@ -51,9 +88,7 @@ def trigger_and_wait_for_conversion(date_result: Dict[str, Any]) -> Dict[str, An
 
     print(f"Flow run {flow_run.name} finished — state: {flow_run.state.name}")
 
-    conversion_result: Optional[Dict[str, Any]] = flow_run.state.result(
-        raise_on_failure=False,
-    )
+    conversion_result = _read_conversion_artifact(str(flow_run.id))
     print(f"Conversion result: {conversion_result}")
     return conversion_result
 
@@ -76,7 +111,7 @@ def date_checker(date_str: str) -> Dict[str, Any]:
 
         conversion_result = trigger_and_wait_for_conversion(date_result)
 
-        final_output = {
+        final_output: Dict[str, Any] = {
             "date_check": date_result,
             "conversion": conversion_result,
         }
