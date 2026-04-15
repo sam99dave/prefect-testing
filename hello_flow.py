@@ -1,15 +1,14 @@
 """
-Date checker flow - validates if date is past or future.
-Input: date string DD/MM/YYYY
-Output: Combined result from date checker + hours-to-seconds conversion.
+Date checker flow - validates a list of dates (past or future) in parallel.
+Input: list of date strings DD/MM/YYYY
+Output: list of results, each with date_check + hours-to-seconds conversion.
 """
 
+import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
-
-import asyncio
 
 from prefect import flow, task
 from prefect.client.orchestration import get_client
@@ -64,36 +63,44 @@ def _read_conversion_artifact(flow_run_id: str) -> Optional[Dict[str, Any]]:
 
 
 @task
-def parse_date(date_str: str) -> datetime:
-    """Parse date string in DD/MM/YYYY format."""
-    return datetime.strptime(date_str, "%d/%m/%Y")
-
-
-@task
-def calculate_hour_difference(input_date: datetime) -> Dict[str, Any]:
+def check_single_date(date_str: str) -> Dict[str, Any]:
     """
-    Calculate hour difference between now and input date.
+    Parse one date string and compute its hour difference from now.
 
-    Returns Failed if future date.
+    Returns a dict with the original string and the check result.
     """
+    try:
+        input_date = datetime.strptime(date_str, "%d/%m/%Y")
+    except ValueError as exc:
+        return {
+            "date_str": date_str,
+            "date_result": {
+                "result": None,
+                "status": f"Failed: Invalid date format - {exc}",
+            },
+        }
+
     now = datetime.now()
-
     if input_date.date() > now.date():
-        return {"result": None, "status": "Failed"}
+        date_result = {"result": None, "status": "Failed"}
+    else:
+        hours_diff = (now - input_date).total_seconds() / 3600
+        date_result = {"result": round(hours_diff, 2), "status": "Completed"}
 
-    diff = now - input_date
-    hours_diff = diff.total_seconds() / 3600
-
-    return {"result": round(hours_diff, 2), "status": "Completed"}
+    return {"date_str": date_str, "date_result": date_result}
 
 
 @task
-def trigger_and_wait_for_conversion(date_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def trigger_and_wait_for_conversion(
+    date_result: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
     """
     Trigger the hours-to-seconds deployment, block until it completes,
     then read the result back via the Prefect artifact SDK.
+
+    Designed to be ``.submit()``-ed so many instances run in parallel.
     """
-    print(f"Triggering hours-to-seconds deployment with input: {date_result}")
+    print(f"Triggering conversion for: {date_result}")
 
     flow_run = run_deployment(
         name="hours-to-seconds-flow/hours-to-seconds-deployment",
@@ -109,34 +116,42 @@ def trigger_and_wait_for_conversion(date_result: Dict[str, Any]) -> Optional[Dic
 
 
 @flow(name="date-checker-flow", log_prints=True)
-def date_checker(date_str: str) -> Dict[str, Any]:
+def date_checker(date_strings: List[str]) -> List[Dict[str, Any]]:
     """
-    Check if date is past or future, trigger conversion, and return combined output.
+    Check multiple dates and convert hours-to-seconds in parallel.
 
-    Input format: DD/MM/YYYY
-    Returns the hours-to-seconds conversion result when the date is valid and
-    in the past, otherwise returns the error / failure from the date check.
+    Input: list of date strings in DD/MM/YYYY format.
+    Returns: list of ``{date_str, date_check, conversion}`` dicts, one per
+    input date, in the same order.
+
+    All hours-to-seconds deployments run concurrently on the managed pool
+    (each in its own container) via ``.submit()``.
     """
-    print(f"Input date: {date_str}")
+    print(f"Received {len(date_strings)} date(s): {date_strings}")
 
-    try:
-        input_date = parse_date(date_str)
-        date_result = calculate_hour_difference(input_date)
-        print(f"Date checker result: {date_result}")
+    # Phase 1 — check every date (lightweight, runs locally in the flow)
+    checked = [check_single_date(ds) for ds in date_strings]
+    print(f"Date check results: {[c['date_result']['status'] for c in checked]}")
 
-        conversion_result = trigger_and_wait_for_conversion(date_result)
+    # Phase 2 — fan-out: submit all conversions concurrently
+    conversion_futures = [
+        trigger_and_wait_for_conversion.submit(item["date_result"])
+        for item in checked
+    ]
 
-        final_output: Dict[str, Any] = {
-            "date_check": date_result,
-            "conversion": conversion_result,
-        }
-        print(f"Final output: {final_output}")
-        return final_output
+    # Phase 3 — fan-in: collect results in original order
+    results: List[Dict[str, Any]] = []
+    for item, future in zip(checked, conversion_futures):
+        results.append(
+            {
+                "date_str": item["date_str"],
+                "date_check": item["date_result"],
+                "conversion": future.result(),
+            }
+        )
 
-    except ValueError as e:
-        error_result: Dict[str, Any] = {
-            "result": None,
-            "status": f"Failed: Invalid date format - {e}",
-        }
-        print(f"Error: {error_result}")
-        return error_result
+    print(f"Final collated output ({len(results)} entries):")
+    for r in results:
+        print(f"  {r['date_str']}: {r['conversion']}")
+
+    return results
