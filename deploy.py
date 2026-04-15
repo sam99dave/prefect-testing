@@ -1,14 +1,14 @@
 """
-Deployment script for both flows using each flow's ``deploy()`` method.
-Registers deployments with Prefect in a single script run.
+Deployment script for both flows using ``flow.from_source().deploy()``.
+
+Managed work pools provision their own compute with official Prefect images.
+Flow source code must live in a remote location (git, S3, …) so the pool
+can clone/download it at runtime.  This script points at the GitHub repo.
 
 Prerequisites:
-- Authenticated to Prefect Cloud: prefect cloud login
-- Work pool 'my-managed-pool' exists in Prefect Cloud UI (managed pool)
-
-Managed work pools handle image selection and source code upload automatically.
-Do NOT pass a custom ``image`` — Prefect picks an official image and uploads
-your flow source to cloud storage so the container can download it at runtime.
+- Authenticated to Prefect Cloud: ``prefect cloud login``
+- Work pool ``my-managed-pool`` exists (type: Prefect Managed)
+- Code committed and pushed to the GitHub repo below
 
 Usage:
   python deploy.py
@@ -18,20 +18,26 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from even_odd_flow import hours_to_seconds
-from hello_flow import date_checker
+from prefect import flow
 
+GITHUB_REPO = "https://github.com/sam99dave/prefect-testing.git"
 DEFAULT_WORK_POOL_NAME = "my-managed-pool"
 
 
-def deploy_all_flows(*, work_pool_name: str) -> list[UUID]:
+def deploy_all_flows(
+    *,
+    repo_url: str,
+    work_pool_name: str,
+) -> list[UUID]:
     """
-    Register both flow deployments with Prefect using ``Flow.deploy``.
+    Register both flow deployments using ``flow.from_source().deploy()``.
 
-    Source code is uploaded to Prefect Cloud automatically. The managed pool
-    selects an official image and downloads the source at runtime.
+    Each flow is loaded from the remote git repo so the managed work pool can
+    clone the source at runtime.  No custom Docker image is needed — the pool
+    picks an official ``prefecthq`` image automatically.
 
     Args:
+        repo_url: HTTPS URL of the git repository containing the flow files.
         work_pool_name: Prefect work pool that will execute scheduled runs.
 
     Returns:
@@ -40,17 +46,27 @@ def deploy_all_flows(*, work_pool_name: str) -> list[UUID]:
     deployment_ids: list[UUID] = []
 
     deployment_ids.append(
-        hours_to_seconds.deploy(
+        flow.from_source(
+            source=repo_url,
+            entrypoint="even_odd_flow.py:hours_to_seconds",
+        ).deploy(
             name="hours-to-seconds-deployment",
             work_pool_name=work_pool_name,
+            build=False,
+            push=False,
             print_next_steps=False,
         )
     )
 
     deployment_ids.append(
-        date_checker.deploy(
+        flow.from_source(
+            source=repo_url,
+            entrypoint="hello_flow.py:date_checker",
+        ).deploy(
             name="date-checker-deployment",
             work_pool_name=work_pool_name,
+            build=False,
+            push=False,
             print_next_steps=True,
         )
     )
@@ -60,9 +76,13 @@ def deploy_all_flows(*, work_pool_name: str) -> list[UUID]:
 
 if __name__ == "__main__":
     print("Deploying flows to Prefect Cloud managed work pool...")
-    print(f"Work pool: {DEFAULT_WORK_POOL_NAME}")
+    print(f"Work pool : {DEFAULT_WORK_POOL_NAME}")
+    print(f"Source    : {GITHUB_REPO}")
 
-    ids = deploy_all_flows(work_pool_name=DEFAULT_WORK_POOL_NAME)
+    ids = deploy_all_flows(
+        repo_url=GITHUB_REPO,
+        work_pool_name=DEFAULT_WORK_POOL_NAME,
+    )
 
     print(f"\nDeployment IDs: {[str(i) for i in ids]}")
     print("View deployments at: https://app.prefect.cloud")
