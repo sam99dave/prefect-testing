@@ -6,7 +6,7 @@ Output: {"result": hour_difference or None, "status": "Completed" or "Failed"}
 
 from datetime import datetime
 from prefect import flow, task
-from prefect.deployments.flow_runs import run_deployment
+from prefect.deployments import run_deployment
 
 
 @task
