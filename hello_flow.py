@@ -105,6 +105,7 @@ def trigger_and_wait_for_conversion(
     flow_run = run_deployment(
         name="hours-to-seconds-flow/hours-to-seconds-deployment",
         parameters={"result_from_date_checker": date_result},
+        tags=["flowc"],
         as_subflow=False,
     )
 
