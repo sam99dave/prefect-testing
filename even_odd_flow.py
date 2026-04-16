@@ -17,6 +17,7 @@ ARTIFACT_KEY = "conversion-result"
 def convert_hours_to_seconds(hours: float) -> float:
     """Convert hours to seconds."""
     print(f"Sleeping 10s to simulate work (hours={hours})...")
+    time.sleep(10)
     return hours * 3600
 
 
