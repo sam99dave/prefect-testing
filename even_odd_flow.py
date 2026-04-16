@@ -12,7 +12,7 @@ from prefect.artifacts import create_markdown_artifact
 ARTIFACT_KEY = "conversion-result"
 
 
-@task
+@task(tags=["time-conversion"])
 def convert_hours_to_seconds(hours: float) -> float:
     """Convert hours to seconds."""
     return hours * 3600
@@ -42,7 +42,7 @@ def process_result(result_dict: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@flow(name="hours-to-seconds-flow", log_prints=True)
+@flow(name="hours-to-seconds-flow", log_prints=True, tags=["hts"])
 def hours_to_seconds(result_from_date_checker: Dict[str, Any]) -> Dict[str, Any]:
     """
     Convert hours to seconds if date checker completed successfully.
