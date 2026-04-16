@@ -4,6 +4,7 @@ Takes the result from date_checker flow and converts hours to seconds.
 """
 
 import json
+import time
 from typing import Any, Dict
 
 from prefect import flow, task
@@ -15,6 +16,8 @@ ARTIFACT_KEY = "conversion-result"
 @task(tags=["time-conversion"])
 def convert_hours_to_seconds(hours: float) -> float:
     """Convert hours to seconds."""
+    print(f"Sleeping 10s to simulate work (hours={hours})...")
+    time.sleep(10)
     return hours * 3600
 
 
