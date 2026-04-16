@@ -52,6 +52,7 @@ def deploy_all_flows(
         ).deploy(
             name="hours-to-seconds-deployment",
             work_pool_name=work_pool_name,
+            tags=["hts"],
             build=False,
             push=False,
             print_next_steps=False,
